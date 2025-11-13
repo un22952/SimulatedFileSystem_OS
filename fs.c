@@ -350,7 +350,46 @@ int file_stat(char *name)
 
 int file_remove(char *name)
 {
-		printf("Error: rm is not implemented.\n");
+		int inodeNum = search_cur_dir(name);
+
+		if (inodeNum < 0 ) {
+			printf("file rm error: %s does not exist!\n", name);
+			return -1;
+		}
+
+		if (inode[inodeNum].type != file) {
+			printf("file rm error: %s is not a directory!\n", name);
+			return -1;
+		}
+
+		// remove dentry
+		for(int i = 0; i < curDir.numEntry; i++)
+		{
+				if (strcmp(name, curDir.dentry[i].name) == 0) {
+					curDir.numEntry--;
+					curDir.dentry[i] = curDir.dentry[curDir.numEntry];
+					
+					if (inode[inodeNum].link_count > 1) {
+						inode[inodeNum].link_count--;
+						return 0;
+					}
+				}
+		}
+		// update the super block
+		superBlock.freeBlockCount += inode[inodeNum].blockCount;
+		superBlock.freeInodeCount += 1;
+
+		// free data blocks
+		for (int i = 0; i < inode[inodeNum].blockCount; i ++) {
+			set_bit(blockMap, inode[inodeNum].directBlock[i], 0 );
+
+		}
+
+		// free inode block
+		set_bit(inodeMap, inodeNum, 0);
+
+
+
 		return 0;
 }
 
@@ -418,7 +457,32 @@ int fs_stat()
 
 int hard_link(char *src, char *dest)
 {
-		printf("Error: ln is not implemented.\n");
+		int inodeNum = search_cur_dir(dest); 
+		if(inodeNum >= 0) {
+				printf("File create failed:  %s exist.\n", dest);
+				return -1;
+		}
+		inodeNum = search_cur_dir(src); 
+		if(inodeNum < 0) {
+				printf("File create failed:  %s does not exist.\n", src);
+				return -1;
+		}
+
+		if(curDir.numEntry + 1 > MAX_DIR_ENTRY) {
+				printf("File create failed: directory is full!\n");
+				return -1;
+		}
+		inode[inodeNum].link_count++;
+
+		// add a new file into the current directory entry
+		strncpy(curDir.dentry[curDir.numEntry].name, dest, strlen(dest));
+		curDir.dentry[curDir.numEntry].name[strlen(dest)] = '\0';
+		curDir.dentry[curDir.numEntry].inode = inodeNum;
+		curDir.numEntry++;
+
+		//update last access of current directory
+		gettimeofday(&(inode[curDir.dentry[0].inode].lastAccess), NULL);
+
 		return 0;
 }
 
