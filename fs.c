@@ -358,7 +358,7 @@ int file_remove(char *name)
 		}
 
 		if (inode[inodeNum].type != file) {
-			printf("file rm error: %s is not a directory!\n", name);
+			printf("file rm error: %s is not a file!\n", name);
 			return -1;
 		}
 
@@ -395,16 +395,64 @@ int file_remove(char *name)
 
 int dir_make(char* name)
 {
-		printf("Error: mkdir is not implemented.\n");
+		int inodeNum = search_cur_dir(name); 
+		if(inodeNum >= 0) {
+				printf("Dir_make failed:  %s exists.\n", name);
+				return -1;
+		}
+
+		if(curDir.numEntry + 1 > MAX_DIR_ENTRY) {
+				printf("Dir_make failed: directory is full!\n");
+				return -1;
+		}
+		if(superBlock.freeBlockCount < 1) {
+				printf("Dir_make failed: data block is full!\n");
+				return -1;
+		}
+
+		if(superBlock.freeInodeCount < 1) {
+				printf("Dir_make failed: inode is full!\n");
+				return -1;
+		}
+
+		inodeNum = get_free_inode();
+		
+		if(inodeNum < 0) {
+				printf("Dir_make error: not enough inode.\n");
+				return -1;
+		}
+		inode[inodeNum].type = directory;
+		inode[inodeNum].owner = 0;
+		inode[inodeNum].group = 0;
+		gettimeofday(&(inode[inodeNum].created), NULL);
+		gettimeofday(&(inode[inodeNum].lastAccess), NULL);
+		inode[inodeNum].size = 1;
+		inode[inodeNum].blockCount = 1;
+		inode[inodeNum].directBlock[0] = get_free_block();
+
+		// add new dentry to the parent dir
+		strncpy(curDir.dentry[curDir.numEntry].name, name, strlen(name));
+		curDir.dentry[curDir.numEntry].name[strlen(name)] = '\0';
+		curDir.dentry[curDir.numEntry].inode = inodeNum;
+		curDir.numEntry += 1;
+
+		// make new dir and write it to disk
+		Dentry newD;
+		newD.numEntry = 2;
+		// current new dir
+		strncpy(newD.dentry[0].name, ".", 1);
+		newD.dentry[0].name[1] = '\0';
+		newD.dentry[0].inode = inodeNum;
+		// parent of new dir
+		strncpy(newD.dentry[1].name, "..", strlen(".."));
+		newD.dentry[1].name[strlen("..")] = '\0';
+		newD.dentry[1].inode = curDir.dentry[0].inode;
+
+		disk_write(inode[inodeNum].directBlock[0], (char*)&newD);
+
+
 		return 0;
 }
-
-int dir_remove(char *name)
-{
-		printf("Error: rmdir is not implemented.\n");
-		return 0;
-}
-
 int dir_change(char* name)
 {
 		int inodeNum, i;
@@ -434,6 +482,63 @@ int dir_change(char* name)
 
 		return 0;
 }
+
+int dir_remove(char *name)
+{
+	int inodeNum = search_cur_dir(name);
+
+	if (inodeNum < 0 ) {
+		printf("dir rm error: %s does not exist!\n", name);
+		return -1;
+	}
+
+	if (inode[inodeNum].type == file) {
+			printf("dir rm error: %s is not a directory! You have to remove this file manually\n", name);
+			return -1;
+	}
+
+	Dentry d;
+	disk_read(inode[inodeNum].directBlock[0], (char*)&d);
+
+	for (int i = 0; i < d.numEntry; i ++) {
+		if (inode[d.dentry[i].inode].type == file) {
+			printf("dir rm error: This directory(%s) contains files. Please remove files first\n", d.dentry[i].name);
+			return -1;
+	}
+	}
+	for (int i = 1; i < d.numEntry; i++) {
+		if (strcmp(d.dentry[i].name, "..") == 0) {
+			i++;
+		} else {
+			dir_change(d.dentry[i].name);
+			dir_remove(d.dentry[i].name);
+		}
+	}
+	dir_change(d.dentry[2].name);
+	set_bit(blockMap, inode[d.dentry[0].inode].directBlock[0], 0 );
+	set_bit(inodeMap, inodeNum, 0);
+	// remove dentry
+		for(int i = 0; i < curDir.numEntry; i++)
+		{
+				if (strcmp(name, curDir.dentry[i].name) == 0) {
+					curDir.numEntry--;
+					curDir.dentry[i] = curDir.dentry[curDir.numEntry];
+					
+				}
+		}
+	// update the super block
+	d.numEntry = 0;
+	superBlock.freeBlockCount += 1;
+	superBlock.freeInodeCount += 1;
+	
+	
+
+
+		
+	return 0;
+}
+
+
 
 int ls()
 {
