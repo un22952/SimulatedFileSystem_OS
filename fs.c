@@ -94,6 +94,7 @@ int fs_umount(char *name)
 		disk_write(curDirBlock, (char*)&curDir);
 
 		disk_umount(name);	
+		
 }
 
 int search_cur_dir(char *name)
@@ -257,7 +258,7 @@ int file_read(char *name, int offset, int size)
 		char *str;
 		int i = offset / BLOCK_SIZE; // index of the first directBlock
 		int o = offset % BLOCK_SIZE; // offset from the first block
-		int bn = (size + offset) / BLOCK_SIZE; // number of blocks
+		int bn = (size + offset) / BLOCK_SIZE; // index of the last block to read
 		int s = size;
 		
 
@@ -292,24 +293,27 @@ int file_read(char *name, int offset, int size)
 		memcpy( str, str_buffer + o, BLOCK_SIZE - o );
 		s -= (BLOCK_SIZE - o);
 		i++;
-		int a = 1;
+		int a = 0;
 
 
-		for (int j = i ; j < bn; j++) {
+		for (int j = i ; j <= bn; j++) {
 			block = inode[inodeNum].directBlock[j];
 
 			disk_read(block, str_buffer);
 			if( s >= BLOCK_SIZE )
 			{
-					memcpy( str+a*BLOCK_SIZE, str_buffer, BLOCK_SIZE );
+					memcpy( str+a*BLOCK_SIZE + BLOCK_SIZE - o, str_buffer, BLOCK_SIZE );
+					s -= BLOCK_SIZE;
+					a++;
 					
 			}
 			else
 			{
-					memcpy( str+a*BLOCK_SIZE, str_buffer, s );
+					memcpy( str+a*BLOCK_SIZE + BLOCK_SIZE - o, str_buffer, s );
 			}
+			
 
-			a++;
+			
 
 
 		}
@@ -371,6 +375,8 @@ int file_remove(char *name)
 					
 					if (inode[inodeNum].link_count > 1) {
 						inode[inodeNum].link_count--;
+						printf("Hard link '%s' removed successfully.\n", name);
+
 						return 0;
 					}
 				}
@@ -380,14 +386,16 @@ int file_remove(char *name)
 		superBlock.freeInodeCount += 1;
 
 		// free data blocks
-		for (int i = 0; i < inode[inodeNum].blockCount; i ++) {
+		for (int i = 0; i < inode[inodeNum].blockCount; i++) {
 			set_bit(blockMap, inode[inodeNum].directBlock[i], 0 );
 
 		}
 
 		// free inode block
 		set_bit(inodeMap, inodeNum, 0);
+		gettimeofday(&(inode[curDir.dentry[0].inode].lastAccess), NULL);		
 
+		printf("File '%s' removed successfully.\n", name);
 
 
 		return 0;
@@ -415,12 +423,14 @@ int dir_make(char* name)
 				return -1;
 		}
 
+		//get new inode block
 		inodeNum = get_free_inode();
 		
 		if(inodeNum < 0) {
 				printf("Dir_make error: not enough inode.\n");
 				return -1;
 		}
+		//create new inode 
 		inode[inodeNum].type = directory;
 		inode[inodeNum].owner = 0;
 		inode[inodeNum].group = 0;
@@ -434,21 +444,23 @@ int dir_make(char* name)
 		strncpy(curDir.dentry[curDir.numEntry].name, name, strlen(name));
 		curDir.dentry[curDir.numEntry].name[strlen(name)] = '\0';
 		curDir.dentry[curDir.numEntry].inode = inodeNum;
-		curDir.numEntry += 1;
+		curDir.numEntry++;
 
 		// make new dir and write it to disk
 		Dentry newD;
 		newD.numEntry = 2;
-		// current new dir
+		// "." dir
 		strncpy(newD.dentry[0].name, ".", 1);
 		newD.dentry[0].name[1] = '\0';
 		newD.dentry[0].inode = inodeNum;
-		// parent of new dir
+		// ".." dir
 		strncpy(newD.dentry[1].name, "..", strlen(".."));
 		newD.dentry[1].name[strlen("..")] = '\0';
 		newD.dentry[1].inode = curDir.dentry[0].inode;
+		gettimeofday(&(inode[curDir.dentry[0].inode].lastAccess), NULL);		
 
 		disk_write(inode[inodeNum].directBlock[0], (char*)&newD);
+		printf("dir created: %s, inode %d\n", name, inodeNum);
 
 
 		return 0;
@@ -485,58 +497,73 @@ int dir_change(char* name)
 
 int dir_remove(char *name)
 {
-	int inodeNum = search_cur_dir(name);
+    
+    int inodeNum = search_cur_dir(name);
 
-	if (inodeNum < 0 ) {
-		printf("dir rm error: %s does not exist!\n", name);
-		return -1;
-	}
+    if (inodeNum < 0) {
+        printf("dir rm error: %s does not exist!\n", name);
+        return -1;
+    }
 
-	if (inode[inodeNum].type == file) {
-			printf("dir rm error: %s is not a directory! You have to remove this file manually\n", name);
-			return -1;
-	}
+    if (inode[inodeNum].type == file) {
+        printf("dir rm error: %s is not a directory!\n", name);
+        return -1;
+    }
 
-	Dentry d;
-	disk_read(inode[inodeNum].directBlock[0], (char*)&d);
+    //Load directory block ---
+    Dentry d;
+    disk_read(inode[inodeNum].directBlock[0], (char *)&d);
 
-	for (int i = 0; i < d.numEntry; i ++) {
-		if (inode[d.dentry[i].inode].type == file) {
-			printf("dir rm error: This directory(%s) contains files. Please remove files first\n", d.dentry[i].name);
-			return -1;
-	}
-	}
-	for (int i = 1; i < d.numEntry; i++) {
-		if (strcmp(d.dentry[i].name, "..") == 0) {
-			i++;
-		} else {
-			dir_change(d.dentry[i].name);
-			dir_remove(d.dentry[i].name);
-		}
-	}
-	dir_change(d.dentry[2].name);
-	set_bit(blockMap, inode[d.dentry[0].inode].directBlock[0], 0 );
-	set_bit(inodeMap, inodeNum, 0);
-	// remove dentry
-		for(int i = 0; i < curDir.numEntry; i++)
-		{
-				if (strcmp(name, curDir.dentry[i].name) == 0) {
-					curDir.numEntry--;
-					curDir.dentry[i] = curDir.dentry[curDir.numEntry];
-					
-				}
-		}
-	// update the super block
-	d.numEntry = 0;
-	superBlock.freeBlockCount += 1;
-	superBlock.freeInodeCount += 1;
-	
-	
+    //Recursively delete subdirectories ---
+    for (int i = 0; i < d.numEntry; i++) {
 
+        char *childName = d.dentry[i].name;
+        int childInode = d.dentry[i].inode;
 
-		
-	return 0;
+        // skip . and ..
+        if (strcmp(childName, ".") == 0 || strcmp(childName, "..") == 0)
+            continue;
+
+        // If child is a file, we refuse
+        if (inode[childInode].type == file) {
+            printf("dir rm error: directory (%s) contains file (%s). Delete files first.\n",
+                   name, childName);
+            return -1;
+        }
+
+        // Child is another directory → recursive delete
+        dir_change(name);                // into parent/name
+        if (dir_remove(childName) < 0) { // recursively delete child
+            dir_change("..");
+            return -1;
+        }
+        dir_change("..");                // back to parent
+    }
+
+    //Free inode + block for *this* directory ---
+    int blockToFree = inode[inodeNum].directBlock[0];
+
+    set_bit(blockMap, blockToFree, 0);  // free data block
+    set_bit(inodeMap, inodeNum, 0);     // free inode
+
+    superBlock.freeBlockCount++;
+    superBlock.freeInodeCount++;
+
+    //Remove this directory entry from its parent ---
+    for (int i = 0; i < curDir.numEntry; i++) {
+        if (strcmp(curDir.dentry[i].name, name) == 0) {
+            // overwrite deleted entry with last entry
+            curDir.dentry[i] = curDir.dentry[curDir.numEntry - 1];
+            curDir.numEntry--;
+            break;
+        }
+    }
+	gettimeofday(&(inode[curDir.dentry[0].inode].lastAccess), NULL);		
+
+    printf("Directory '%s' removed successfully.\n", name);
+    return 0;
 }
+
 
 
 
@@ -587,7 +614,7 @@ int hard_link(char *src, char *dest)
 
 		//update last access of current directory
 		gettimeofday(&(inode[curDir.dentry[0].inode].lastAccess), NULL);
-
+		printf("hard link created: %s, inode %d\n", dest, inodeNum);
 		return 0;
 }
 
