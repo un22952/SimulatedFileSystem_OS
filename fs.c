@@ -591,17 +591,17 @@ int hard_link(char *src, char *dest)
 {
 		int inodeNum = search_cur_dir(dest); 
 		if(inodeNum >= 0) {
-				printf("File create failed:  %s exist.\n", dest);
+				printf("hard_link create failed:  %s exist.\n", dest);
 				return -1;
 		}
 		inodeNum = search_cur_dir(src); 
 		if(inodeNum < 0) {
-				printf("File create failed:  %s does not exist.\n", src);
+				printf("hard_link create failed:  %s does not exist.\n", src);
 				return -1;
 		}
 
 		if(curDir.numEntry + 1 > MAX_DIR_ENTRY) {
-				printf("File create failed: directory is full!\n");
+				printf("hard_link create failed: directory is full!\n");
 				return -1;
 		}
 		inode[inodeNum].link_count++;
